@@ -131,10 +131,33 @@
 | **BUG-012** | 🟢 Low | Scrapers | **ProxyManager Port Doubling & Credential Leak**: Playwright server URL generated duplicate ports (`proxy3:8888:8888`) and retained auth credentials in `proxy.url`. | 🛠 Fixed | Redacted credentials in `parseProxyUrl` and formatted Playwright proxy server cleanly. |
 | **BUG-013** | 🟡 Medium | Security/AI | **Prompt Injection via Customer Reviews**: Untrusted scraped reviews passed raw into LLM prompt. | 🛠 Fixed | Encapsulated reviews in XML tags with length bounding (max 500 chars, max 20 reviews) and strict instructions. |
 | **BUG-014** | 🔴 Critical | Extraction | **Multi-Store HTTP 200 Interstitial / False Success**: Scrapers assumed HTTP 200 meant valid product DOM. Interstitials and CAPTCHAs caused missing selectors and unclassified 422 crashes without browser fallback. | 🛠 Fixed | Built multi-signal `ResponseValidator`, automatic `HeadlessScraper` fallback orchestration, structured `ExtractionError` taxonomy, `@graph` JSON-LD parsing, and `productIdExtractor`. |
+| **BUG-015** | 🟠 High | Pipeline/Data Quality | **Premature INSUFFICIENT_DATA Pipeline Crash**: Scrapers threw error when reviews < 3, discarding valid product metadata and halting AI analysis. | 🛠 Fixed | Introduced explicit data-quality states (`REVIEWS_AVAILABLE`, `LIMITED_REVIEWS`, `NO_REVIEWS_FOUND`, `SOURCE_BLOCKED`, `SCRAPE_FAILED`), preserved product metadata, enforced strict no-fabrication AI rules, and updated frontend alerts. |
 
 ---
 
 ## 📝 4. Development Activity Log
+
+### Date: 2026-09-13
+- **Elimination of Premature INSUFFICIENT_DATA Pipeline Crash & Explicit Data-Quality States (BUG-015)**:
+  - **Confirmed Root Cause**: Scrapers threw an `INSUFFICIENT_DATA` (422) error when fewer than 3 reviews were collected (`reviews.length < 3`), completely aborting `AnalysisService`, discarding valid product metadata, and displaying an unhelpful error banner in the client.
+  - **Introduced Explicit Data-Quality States**:
+    - `REVIEWS_AVAILABLE` (3+ reviews): Full multi-review AI consensus synthesis.
+    - `LIMITED_REVIEWS` (1–2 reviews): Honest synthesis constrained to scraped reviews, calibrated confidence (~45%), and disclaimer that consensus cannot be formed from 1–2 reviews.
+    - `NO_REVIEWS_FOUND` (0 reviews): Returns product metadata, generates specification-based summary with `CONSIDER WITH CAUTION` verdict and calibrated confidence (~30%).
+    - `SOURCE_BLOCKED` & `SCRAPE_FAILED`: Technical failures (anti-bot blocks, network errors, missing title) continue to report accurate HTTP 502/422 status codes with diagnostic categorization.
+  - **Enforced Strict Data Quality Rules**:
+    - Updated `MockAI` and `GeminiAI` prompts to ensure customer reviews and consensus are **never** invented, fabricated, or assumed for 0-review or limited-review products.
+  - **Structured Pipeline Logging**: Added comprehensive console logging tracking Product URL, Source, Reviews count, Scraping status, and Final Pipeline Decision.
+  - **Frontend Transparency**:
+    - Updated `VerdictCard.jsx` to render explicit data-quality warning banners for `LIMITED_REVIEWS` and `NO_REVIEWS_FOUND`.
+    - Updated `AnalysisDashboard.jsx` to handle 0-review customer review samples cleanly and include data quality state in summary exports.
+  - **Test Suite Results**:
+    - Expanded test suite with `dataQualityPipeline.test.js` covering all 7 test requirements (0 reviews, 1 review, 2 reviews, 3+ reviews, blocked source, scrape exception, missing metadata).
+    - 77 passing tests across 10 test files (100% pass rate).
+    - Client production build verified with 0 errors.
+  - **Remaining Limitations**:
+    - Products with 0 reviews rely strictly on seller specs & ratings for verdict calibration.
+    - Retailers with dynamic scroll/lazy-loaded review widgets require browser pagination for deep historical reviews.
 
 ### Date: 2026-08-15
 - **Phase 2.1 Multi-Store Extraction Reliability Hardening Complete**:

@@ -19,6 +19,11 @@ const analysisSchema = new mongoose.Schema(
       enum: ['amazon', 'flipkart', 'generic', 'walmart', 'target', 'ebay', 'myntra'], 
       default: 'generic' 
     },
+    dataQualityState: {
+      type: String,
+      enum: ['REVIEWS_AVAILABLE', 'LIMITED_REVIEWS', 'NO_REVIEWS_FOUND', 'SOURCE_BLOCKED', 'SCRAPE_FAILED'],
+      default: 'REVIEWS_AVAILABLE'
+    },
     productInfo: {
       productId: { type: String, default: '' },
       title: { type: String, required: true },

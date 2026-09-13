@@ -1,7 +1,7 @@
 import React from 'react';
 import { ThumbsUp, AlertTriangle, XCircle, Star, ExternalLink, ShieldCheck } from 'lucide-react';
 
-export const VerdictCard = ({ productInfo, report, platform, url }) => {
+export const VerdictCard = ({ productInfo, report, platform, url, dataQualityState }) => {
   const getVerdictStyles = (verdict) => {
     switch (verdict) {
       case 'BUY':
@@ -116,6 +116,24 @@ export const VerdictCard = ({ productInfo, report, platform, url }) => {
                 </div>
               </div>
             </div>
+
+            {dataQualityState === 'LIMITED_REVIEWS' && (
+              <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                <span>
+                  <strong>Limited Reviews:</strong> Only {productInfo.reviewCount || 1} customer review(s) found. AI analysis has lower confidence and reflects early impressions rather than broad consensus.
+                </span>
+              </div>
+            )}
+
+            {dataQualityState === 'NO_REVIEWS_FOUND' && (
+              <div className="mb-4 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs flex items-center gap-2.5">
+                <ShieldCheck className="w-4 h-4 shrink-0 text-cyan-400" />
+                <span>
+                  <strong>No Customer Reviews Found:</strong> Product metadata was successfully extracted, but zero buyer reviews are available. Analysis is based on listed product specifications.
+                </span>
+              </div>
+            )}
 
             <p className="text-slate-200 text-sm sm:text-base leading-relaxed font-medium mb-4">
               "{report.verdictReason}"

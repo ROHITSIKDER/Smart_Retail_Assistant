@@ -1,4 +1,5 @@
 export const ErrorCategory = {
+  TIMEOUT: 'TIMEOUT',
   NETWORK_ERROR: 'NETWORK_ERROR',
   HTTP_ERROR: 'HTTP_ERROR',
   CAPTCHA: 'CAPTCHA',

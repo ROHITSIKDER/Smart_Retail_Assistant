@@ -4,9 +4,10 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class GenericScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const $ = await this.fetchValidatedHtml({
-      platform: 'generic'
+      platform: 'generic',
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -54,11 +55,7 @@ export class GenericScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('product page', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'generic',
@@ -70,6 +67,7 @@ export class GenericScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }

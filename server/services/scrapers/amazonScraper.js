@@ -4,10 +4,11 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class AmazonScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const $ = await this.fetchValidatedHtml({
       platform: 'amazon',
-      waitForSelector: '#productTitle, #title, .a-price'
+      waitForSelector: '#productTitle, #title, .a-price',
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -77,11 +78,7 @@ export class AmazonScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('Amazon', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'amazon',
@@ -93,6 +90,7 @@ export class AmazonScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }

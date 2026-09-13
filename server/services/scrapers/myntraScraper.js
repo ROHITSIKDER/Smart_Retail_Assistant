@@ -5,12 +5,13 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class MyntraScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const { headlessFirst } = detectPlatform(this.url);
     const $ = await this.fetchValidatedHtml({
       platform: 'myntra',
       waitForSelector: '.pdp-name, h1[class*="pdp"]',
-      headlessFirst
+      headlessFirst,
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -74,11 +75,7 @@ export class MyntraScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('Myntra', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'myntra',
@@ -90,6 +87,7 @@ export class MyntraScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }

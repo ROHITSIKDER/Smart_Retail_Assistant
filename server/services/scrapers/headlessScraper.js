@@ -7,10 +7,18 @@ export class HeadlessScraper {
   static async fetchRenderedHtml(url, options = {}) {
     const {
       waitForSelector = null,
-      proxyEntry = null
+      proxyEntry = null,
+      navTimeout = 10000,
+      selectorTimeout = 4000,
+      signal = null
     } = options;
 
+    if (signal?.aborted) {
+      throw new Error('Operation aborted by client');
+    }
+
     let context;
+    let abortListener;
     try {
       const headers = ProxyManager.getRandomHeaders();
       const browser = await BrowserPool.acquire();
@@ -27,6 +35,14 @@ export class HeadlessScraper {
       }
 
       context = await browser.newContext(contextOptions);
+
+      if (signal) {
+        abortListener = () => {
+          context.close().catch(() => {});
+        };
+        signal.addEventListener('abort', abortListener, { once: true });
+      }
+
       const page = await context.newPage();
 
       await page.addInitScript(() => {
@@ -54,10 +70,10 @@ export class HeadlessScraper {
       });
 
       console.log(`[Headless Engine] Navigating to ${url}...`);
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
 
-      if (waitForSelector) {
-        await page.waitForSelector(waitForSelector, { timeout: 6000 }).catch(() => {
+      if (waitForSelector && !signal?.aborted) {
+        await page.waitForSelector(waitForSelector, { timeout: selectorTimeout }).catch(() => {
           console.warn(`[Headless Engine Warning] Selector "${waitForSelector}" timeout reached.`);
         });
       }
@@ -71,6 +87,9 @@ export class HeadlessScraper {
       }
       return null;
     } finally {
+      if (signal && abortListener) {
+        signal.removeEventListener('abort', abortListener);
+      }
       if (context) {
         await context.close().catch(() => {});
       }

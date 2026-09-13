@@ -5,6 +5,14 @@ import { createSafeAxios } from '../../utils/safeFetch.js';
 import { ResponseValidator, ErrorCategory } from '../../utils/responseValidator.js';
 import { ExtractionError } from '../../utils/extractionError.js';
 
+export const DataQualityState = {
+  REVIEWS_AVAILABLE: 'REVIEWS_AVAILABLE',
+  LIMITED_REVIEWS: 'LIMITED_REVIEWS',
+  NO_REVIEWS_FOUND: 'NO_REVIEWS_FOUND',
+  SOURCE_BLOCKED: 'SOURCE_BLOCKED',
+  SCRAPE_FAILED: 'SCRAPE_FAILED'
+};
+
 export class BaseScraper {
   constructor(url) {
     this.url = url;
@@ -24,10 +32,12 @@ export class BaseScraper {
     };
   }
 
-  async fetchWithAxios(proxyConfig) {
+  async fetchWithAxios(proxyConfig, options = {}) {
+    const { timeout = 8000, signal = null } = options;
     const axiosConfig = {
       headers: this.headers,
-      timeout: 12000,
+      timeout,
+      signal: signal || undefined,
       validateStatus: () => true // Allow handling 200, 403, 404, 429, 503 explicitly
     };
 
@@ -50,13 +60,36 @@ export class BaseScraper {
       platform = 'generic',
       waitForSelector = null,
       headlessFirst = false,
-      maxRetries = ProxyManager.getMaxRetries()
+      maxRetries = Math.min(2, ProxyManager.getMaxRetries()),
+      signal = null,
+      deadline = null,
+      httpTimeout = 8000,
+      navTimeout = 10000,
+      selectorTimeout = 4000
     } = options;
 
     const attempts = Math.max(1, maxRetries);
     let lastError = null;
 
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (signal?.aborted) {
+        throw new ExtractionError('Scraping was cancelled.', {
+          category: ErrorCategory.TIMEOUT,
+          statusCode: 499,
+          platform,
+          diagnostics: this.getRedactedDiagnostics()
+        });
+      }
+
+      if (deadline && Date.now() >= deadline) {
+        throw new ExtractionError('Scraping deadline exceeded.', {
+          category: ErrorCategory.TIMEOUT,
+          statusCode: 504,
+          platform,
+          diagnostics: this.getRedactedDiagnostics()
+        });
+      }
+
       this.diagnostics.attempts = attempt + 1;
       const proxyEntry = ProxyManager.getNextProxy();
       const proxyConfig = proxyEntry ? ProxyManager.getProxyConfig(proxyEntry) : null;
@@ -67,10 +100,21 @@ export class BaseScraper {
           this.diagnostics.strategy = 'headless_browser';
           const rendered = await HeadlessScraper.fetchRenderedHtml(this.url, {
             waitForSelector,
-            proxyEntry
+            proxyEntry,
+            navTimeout,
+            selectorTimeout,
+            signal
           });
 
           if (!rendered) {
+            if (signal?.aborted) {
+              throw new ExtractionError('Scraping was cancelled.', {
+                category: ErrorCategory.TIMEOUT,
+                statusCode: 499,
+                platform,
+                diagnostics: this.getRedactedDiagnostics()
+              });
+            }
             throw new ExtractionError('Headless browser fetch returned empty content', {
               category: ErrorCategory.NETWORK_ERROR,
               statusCode: 502,
@@ -101,7 +145,10 @@ export class BaseScraper {
 
         // Direct HTTP Request
         this.diagnostics.strategy = 'direct_http';
-        const { $, status, dataLength } = await this.fetchWithAxios(proxyConfig);
+        const { $, status, dataLength } = await this.fetchWithAxios(proxyConfig, {
+          timeout: httpTimeout,
+          signal
+        });
 
         const validation = ResponseValidator.validate($, {
           status,
@@ -126,7 +173,10 @@ export class BaseScraper {
 
           const rendered = await HeadlessScraper.fetchRenderedHtml(this.url, {
             waitForSelector,
-            proxyEntry
+            proxyEntry,
+            navTimeout,
+            selectorTimeout,
+            signal
           });
 
           if (rendered) {
@@ -161,6 +211,18 @@ export class BaseScraper {
           diagnostics: this.getRedactedDiagnostics()
         });
       } catch (error) {
+        if (error instanceof ExtractionError && error.category === ErrorCategory.TIMEOUT) {
+          throw error;
+        }
+        if (signal?.aborted || error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+          throw new ExtractionError('Scraping was cancelled.', {
+            category: ErrorCategory.TIMEOUT,
+            statusCode: 499,
+            platform,
+            diagnostics: this.getRedactedDiagnostics()
+          });
+        }
+
         lastError = error;
         if (proxyUrl) {
           ProxyManager.markProxyFailed(proxyUrl);
@@ -301,6 +363,19 @@ export class BaseScraper {
     }
 
     return details;
+  }
+
+  determineReviewQuality(count) {
+    if (count >= 3) {
+      this.diagnostics.reviewStatus = DataQualityState.REVIEWS_AVAILABLE;
+      return DataQualityState.REVIEWS_AVAILABLE;
+    }
+    if (count > 0) {
+      this.diagnostics.reviewStatus = DataQualityState.LIMITED_REVIEWS;
+      return DataQualityState.LIMITED_REVIEWS;
+    }
+    this.diagnostics.reviewStatus = DataQualityState.NO_REVIEWS_FOUND;
+    return DataQualityState.NO_REVIEWS_FOUND;
   }
 
   throwInsufficientData(platform, count) {

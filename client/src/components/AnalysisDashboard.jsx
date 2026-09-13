@@ -10,7 +10,7 @@ export const AnalysisDashboard = ({ analysisData, onReset }) => {
 
   if (!analysisData) return null;
 
-  const { productInfo, report, platform, url, rawReviewsSample = [] } = analysisData;
+  const { productInfo, report, platform, url, rawReviewsSample = [], dataQualityState } = analysisData;
 
   const handleCopyReport = () => {
     const text = `
@@ -19,6 +19,7 @@ export const AnalysisDashboard = ({ analysisData, onReset }) => {
 Product: ${productInfo.title}
 Price: ${productInfo.price} | Rating: ${productInfo.rating}⭐
 Platform: ${platform}
+Data Quality: ${dataQualityState || 'REVIEWS_AVAILABLE'}
 
 VERDICT: ${report.verdict}
 "${report.verdictReason}"
@@ -63,20 +64,20 @@ BEST FOR: ${report.bestFor.join(', ')}
       </div>
 
       {/* Main Report Cards */}
-      <VerdictCard productInfo={productInfo} report={report} platform={platform} url={url} />
+      <VerdictCard productInfo={productInfo} report={report} platform={platform} url={url} dataQualityState={dataQualityState} />
       <ProsConsGrid pros={report.pros} cons={report.cons} />
       <TargetAudience bestFor={report.bestFor} notRecommendedFor={report.notRecommendedFor} />
       <KeyThemes themes={report.keyThemes} />
 
       {/* Raw Reviews Sample Section */}
-      {rawReviewsSample.length > 0 && (
-        <div className="glass-card p-6 border-slate-800">
-          <div className="flex items-center gap-2 mb-4">
-            <MessageSquareText className="w-4 h-4 text-cyan-400" />
-            <h4 className="font-bold text-white text-xs uppercase tracking-wider">
-              Sample Customer Reviews Analyzed ({rawReviewsSample.length})
-            </h4>
-          </div>
+      <div className="glass-card p-6 border-slate-800">
+        <div className="flex items-center gap-2 mb-4">
+          <MessageSquareText className="w-4 h-4 text-cyan-400" />
+          <h4 className="font-bold text-white text-xs uppercase tracking-wider">
+            Sample Customer Reviews Analyzed ({rawReviewsSample.length})
+          </h4>
+        </div>
+        {rawReviewsSample.length > 0 ? (
           <div className="space-y-3">
             {rawReviewsSample.map((rev, idx) => (
               <div key={idx} className="p-3 rounded-lg bg-dark-900/60 border border-slate-800 text-xs text-slate-300 italic">
@@ -84,8 +85,12 @@ BEST FOR: ${report.bestFor.join(', ')}
               </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-xs text-slate-400 italic">
+            No customer reviews were found on the source product page. Analysis was performed using verified seller product specifications.
+          </p>
+        )}
+      </div>
 
     </div>
   );

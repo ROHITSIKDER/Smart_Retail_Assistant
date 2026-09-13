@@ -30,7 +30,8 @@ describe('Store scrapers with sanitized HTML fixtures', () => {
     expect(result.rating).toBe(4.6);
     expect(result.reviews).toHaveLength(3);
     expect(result.diagnostics.productStatus).toBe('SUCCESS');
-    expect(result.diagnostics.reviewStatus).toBe('SUCCESS');
+    expect(result.diagnostics.reviewStatus).toBe('REVIEWS_AVAILABLE');
+    expect(result.dataQualityState).toBe('REVIEWS_AVAILABLE');
   });
 
   it('AmazonScraper uses JSON-LD fallback when primary selectors are absent', async () => {
@@ -134,14 +135,16 @@ describe('Store scrapers with sanitized HTML fixtures', () => {
     expect(result.reviews).toHaveLength(3);
   });
 
-  it('GenericScraper separates product extraction from review extraction and rejects insufficient reviews', async () => {
+  it('GenericScraper separates product extraction from review extraction and returns LIMITED_REVIEWS for single review', async () => {
     const html = fs.readFileSync(path.join(FIXTURES_DIR, 'insufficient_reviews.html'), 'utf-8');
     const scraper = new GenericScraper('https://www.example.com/products/lamp');
     vi.spyOn(scraper, 'fetchValidatedHtml').mockResolvedValue(cheerio.load(html));
 
-    await expect(scraper.scrape()).rejects.toMatchObject({
-      code: 'INSUFFICIENT_DATA',
-      statusCode: 422
-    });
+    const result = await scraper.scrape();
+    expect(result.platform).toBe('generic');
+    expect(result.title).toBe('Minimalist LED Desk Lamp');
+    expect(result.price).toBe('$35.00');
+    expect(result.reviews).toHaveLength(1);
+    expect(result.dataQualityState).toBe('LIMITED_REVIEWS');
   });
 });

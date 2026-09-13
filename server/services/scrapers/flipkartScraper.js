@@ -4,10 +4,11 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class FlipkartScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const $ = await this.fetchValidatedHtml({
       platform: 'flipkart',
-      waitForSelector: 'span.B_NuT2, h1._6ERy96, h1.yhB1nd'
+      waitForSelector: 'span.B_NuT2, h1._6ERy96, h1.yhB1nd',
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -74,11 +75,7 @@ export class FlipkartScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('Flipkart', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'flipkart',
@@ -90,6 +87,7 @@ export class FlipkartScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }

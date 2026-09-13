@@ -5,12 +5,13 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class EbayScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const { headlessFirst } = detectPlatform(this.url);
     const $ = await this.fetchValidatedHtml({
       platform: 'ebay',
       waitForSelector: '#itemTitle, h1.x-item-title__mainTitle',
-      headlessFirst
+      headlessFirst,
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -74,11 +75,7 @@ export class EbayScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('eBay', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'ebay',
@@ -90,6 +87,7 @@ export class EbayScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }

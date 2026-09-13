@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { UrlInput } from './components/UrlInput';
@@ -6,7 +7,6 @@ import { AnalysisDashboard } from './components/AnalysisDashboard';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { analyzeProductUrl, fetchHistory } from './services/api';
 import { AlertCircle, RefreshCw } from 'lucide-react';
-
 export function App() {
   const [analysisData, setAnalysisData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);

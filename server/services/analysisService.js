@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import Analysis from '../models/Analysis.js';
 import { getIsMongoConnected } from '../config/db.js';
 import { ScraperFactory } from './scrapers/scraperFactory.js';
+import { DataQualityState } from './scrapers/baseScraper.js';
+import { ErrorCategory } from '../utils/responseValidator.js';
 import { AIFactory } from './ai/aiFactory.js';
 
 // In-memory cache fallback if MongoDB is disconnected
@@ -65,17 +67,42 @@ export class AnalysisService {
       // Scrape Product & Reviews
       console.log(`[Scraper] Starting data extraction for: ${url}`);
       const scraper = ScraperFactory.getScraper(url);
-      const scrapedData = await scraper.scrape();
+      let scrapedData;
+      try {
+        scrapedData = await scraper.scrape();
+      } catch (error) {
+        const isBlocked = [
+          ErrorCategory.BOT_BLOCKED,
+          ErrorCategory.CAPTCHA,
+          ErrorCategory.ACCESS_DENIED,
+          ErrorCategory.RATE_LIMITED,
+          ErrorCategory.LOGIN_REQUIRED
+        ].includes(error.category);
+
+        error.dataQualityState = isBlocked
+          ? DataQualityState.SOURCE_BLOCKED
+          : DataQualityState.SCRAPE_FAILED;
+
+        console.warn(
+          `[Scraper] Failed: URL="${url}" | Scraping status="${error.dataQualityState}" | Category="${error.category || 'UNKNOWN'}" | Reason="${error.message}"`
+        );
+        throw error;
+      }
+
+      console.log(
+        `[Scraper] Completed: URL="${url}" | Source="${scrapedData.platform}" | Reviews found=${scrapedData.reviews.length} | Scraping status="${scrapedData.dataQualityState}"`
+      );
 
       // Synthesize with AI Engine
-      console.log(`[AI Engine] Synthesizing review insights for: "${scrapedData.title}"`);
+      console.log(`[AI Engine] Synthesizing review insights for: "${scrapedData.title}" (Quality: ${scrapedData.dataQualityState})`);
       const aiProvider = AIFactory.getAIProvider();
       const aiReport = await aiProvider.generateReport(
         {
           title: scrapedData.title,
           brand: scrapedData.brand,
           price: scrapedData.price,
-          rating: scrapedData.rating
+          rating: scrapedData.rating,
+          dataQualityState: scrapedData.dataQualityState
         },
         scrapedData.reviews
       );
@@ -85,6 +112,7 @@ export class AnalysisService {
         url,
         urlHash,
         platform: scrapedData.platform,
+        dataQualityState: scrapedData.dataQualityState,
         productInfo: {
           productId: scrapedData.productId || '',
           title: scrapedData.title,
@@ -98,6 +126,10 @@ export class AnalysisService {
         reviewsAnalyzedCount: scrapedData.reviews.length,
         rawReviewsSample: scrapedData.reviews.slice(0, 5)
       };
+
+      console.log(
+        `[Pipeline Decision] URL="${url}" | Source="${resultDoc.platform}" | Quality="${resultDoc.dataQualityState}" | Verdict="${resultDoc.report.verdict}" | Confidence=${resultDoc.report.confidenceScore}%`
+      );
 
       // Save to Cache if DB connected, else memory cache
       if (getIsMongoConnected()) {
@@ -146,7 +178,7 @@ export class AnalysisService {
         const history = await Analysis.find()
           .sort({ createdAt: -1 })
           .limit(safeLimit)
-          .select('url platform productInfo report.verdict report.summary createdAt');
+          .select('url platform dataQualityState productInfo report.verdict report.summary createdAt');
         return history;
       } catch (err) {
         console.warn(`[History Warning] DB lookup error: ${err.message}`);

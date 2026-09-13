@@ -5,12 +5,13 @@ import { ExtractionError } from '../../utils/extractionError.js';
 import { ErrorCategory } from '../../utils/responseValidator.js';
 
 export class TargetScraper extends BaseScraper {
-  async scrape() {
+  async scrape(options = {}) {
     const { headlessFirst } = detectPlatform(this.url);
     const $ = await this.fetchValidatedHtml({
       platform: 'target',
       waitForSelector: '[data-test="product-title"], h1',
-      headlessFirst
+      headlessFirst,
+      ...options
     });
 
     const jsonLd = this.extractJsonLd($);
@@ -72,11 +73,7 @@ export class TargetScraper extends BaseScraper {
       }
     });
 
-    if (reviews.length < 3) {
-      this.throwInsufficientData('Target', reviews.length);
-    }
-
-    this.diagnostics.reviewStatus = 'SUCCESS';
+    const dataQualityState = this.determineReviewQuality(reviews.length);
 
     return {
       platform: 'target',
@@ -88,6 +85,7 @@ export class TargetScraper extends BaseScraper {
       reviewCount: reviews.length,
       imageUrl,
       reviews,
+      dataQualityState,
       diagnostics: this.getRedactedDiagnostics()
     };
   }
