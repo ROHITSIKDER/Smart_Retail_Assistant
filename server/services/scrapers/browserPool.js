@@ -8,6 +8,7 @@ export class BrowserPool {
     if (!sharedBrowser || !sharedBrowser.isConnected()) {
       sharedBrowser = await chromium.launch({
         headless: true,
+        timeout: 8000,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',

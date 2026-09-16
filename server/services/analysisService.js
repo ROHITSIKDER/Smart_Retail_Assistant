@@ -27,7 +27,8 @@ export class AnalysisService {
     }
   }
 
-  static async analyzeProductUrl(url, forceRefresh = false) {
+  static async analyzeProductUrl(url, forceRefresh = false, options = {}) {
+    const { signal = null, deadline = null } = options;
     const urlHash = this.hashUrl(url);
 
     // 1. Check MongoDB Cache (or in-memory cache) unless forceRefresh is set
@@ -64,12 +65,16 @@ export class AnalysisService {
 
     // 3. Initiate analysis job with lock
     const analysisPromise = (async () => {
+      if (signal?.aborted) {
+        throw signal.reason || new Error('Request aborted before execution');
+      }
+
       // Scrape Product & Reviews
       console.log(`[Scraper] Starting data extraction for: ${url}`);
       const scraper = ScraperFactory.getScraper(url);
       let scrapedData;
       try {
-        scrapedData = await scraper.scrape();
+        scrapedData = await scraper.scrape({ signal, deadline });
       } catch (error) {
         const isBlocked = [
           ErrorCategory.BOT_BLOCKED,
@@ -89,6 +94,10 @@ export class AnalysisService {
         throw error;
       }
 
+      if (signal?.aborted) {
+        throw signal.reason || new Error('Request aborted after scraping');
+      }
+
       console.log(
         `[Scraper] Completed: URL="${url}" | Source="${scrapedData.platform}" | Reviews found=${scrapedData.reviews.length} | Scraping status="${scrapedData.dataQualityState}"`
       );
@@ -96,6 +105,9 @@ export class AnalysisService {
       // Synthesize with AI Engine
       console.log(`[AI Engine] Synthesizing review insights for: "${scrapedData.title}" (Quality: ${scrapedData.dataQualityState})`);
       const aiProvider = AIFactory.getAIProvider();
+      const remainingForAI = deadline ? Math.max(1000, deadline - Date.now() - 1000) : 6000;
+      const aiTimeout = Math.min(6000, remainingForAI);
+
       const aiReport = await aiProvider.generateReport(
         {
           title: scrapedData.title,
@@ -104,7 +116,11 @@ export class AnalysisService {
           rating: scrapedData.rating,
           dataQualityState: scrapedData.dataQualityState
         },
-        scrapedData.reviews
+        scrapedData.reviews,
+        {
+          timeout: aiTimeout,
+          signal
+        }
       );
 
       // Construct Final Document

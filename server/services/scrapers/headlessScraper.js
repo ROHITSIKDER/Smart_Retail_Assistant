@@ -8,8 +8,8 @@ export class HeadlessScraper {
     const {
       waitForSelector = null,
       proxyEntry = null,
-      navTimeout = 10000,
-      selectorTimeout = 4000,
+      navTimeout = 8000,
+      selectorTimeout = 3000,
       signal = null
     } = options;
 

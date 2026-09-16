@@ -13,7 +13,7 @@ export class GeminiAI extends BaseAI {
   }
 
   async generateReport(productInfo, reviews, options = {}) {
-    const { timeout = 8000, signal = null } = options;
+    const { timeout = 6000, signal = null } = options;
     if (!this.apiKey) {
       console.log('[AI Provider] GEMINI_API_KEY not set. Using high-fidelity Mock AI Engine.');
       const mock = new MockAI();
@@ -21,6 +21,10 @@ export class GeminiAI extends BaseAI {
     }
 
     try {
+      if (signal?.aborted) {
+        throw new Error('AI processing cancelled by client');
+      }
+
       const validReviews = Array.isArray(reviews) ? reviews.filter((r) => typeof r === 'string' && r.trim().length > 0) : [];
       let reviewSection = '';
       let dataQualityInstruction = '';
@@ -76,7 +80,7 @@ ${reviewSection}
 ${dataQualityInstruction}
 `;
 
-      const response = await this.ai.models.generateContent({
+      const generatePromise = this.ai.models.generateContent({
         model: 'gemini-1.5-flash',
         contents: prompt,
         config: {
@@ -84,6 +88,29 @@ ${dataQualityInstruction}
           responseMimeType: 'application/json'
         }
       });
+
+      let timerId;
+      let abortHandler;
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => {
+          reject(new Error(`Gemini API call timed out after ${timeout}ms`));
+        }, timeout);
+
+        if (signal) {
+          abortHandler = () => reject(new Error('AI processing cancelled by client'));
+          signal.addEventListener('abort', abortHandler, { once: true });
+        }
+      });
+
+      let response;
+      try {
+        response = await Promise.race([generatePromise, timeoutPromise]);
+      } finally {
+        clearTimeout(timerId);
+        if (signal && abortHandler) {
+          signal.removeEventListener('abort', abortHandler);
+        }
+      }
 
       const text = response.text;
       const parsed = JSON.parse(text);
@@ -94,9 +121,14 @@ ${dataQualityInstruction}
       });
       return validatedReport;
     } catch (error) {
+      const isTimeout = typeof error.message === 'string' && error.message.toLowerCase().includes('timed out');
       console.warn(`[AI Provider Warning] Gemini API call or schema validation failed (${error.message}). Falling back to Mock AI Engine.`);
       const mock = new MockAI();
-      return mock.generateReport(productInfo, reviews);
+      const report = await mock.generateReport(productInfo, reviews, options);
+      if (isTimeout) {
+        report.fallbackReason = 'AI_TIMEOUT';
+      }
+      return report;
     }
   }
 }

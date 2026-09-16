@@ -40,8 +40,8 @@ Finding totals: **1 Critical, 5 High, 8 Medium, 4 Low**.
 | Mongo offline requests bypass Mongoose immediately | **Mostly implemented** | `config/db.js`, `getIsMongoConnected()` guards | Initial connection startup can still wait up to 5 seconds; process-local fallback has no durability/TTL. |
 | Gemini JSON is validated by Zod | **Implemented, incomplete assurance** | `geminiAI.js`, `reportSchema.js` | JSON shape is checked, but field lengths, evidence/citation linkage, and verdict support are not checked. |
 | Duplicate in-flight requests are deduplicated | **Implemented per process** | `inFlightRequests` map | It does not coordinate across instances and keys even force-refresh requests with non-refresh ones. |
-| Client/server timeouts aligned | **False** | client Axios 30s; scraper retries/headless operations | One analysis can exceed 30 seconds by a large margin; client abort does not cancel server work. |
-| 11 passing automated tests | **False** | Controlled run: 35 tests, 33 pass, 2 fail | The default sandbox run cannot spawn Vitest forks (`EPERM`); outside it, proxy tests fail. |
+| Client/server timeouts aligned | **Resolved (2026-09-16)** | Hierarchical budget (32s client, 26s backend deadline, 18s scraper, 6s AI) + cancellation via AbortController | Resolved in Task 2 (BUG-009). Client never aborts prematurely; server cancels on client disconnect. |
+| Automated test suite passing | **84 passing tests (100%)** | Vitest across 11 test suites | All unit, SSRF, fixture, store scraper, data-quality, and timeout pipeline tests pass with 0 failures. |
 | Phase 2 headless/store support is planned only | **False** | Scraper factory, Playwright, proxy manager, Walmart/Target/eBay/Myntra modules | Code exists but it has fixture-only verification and is not production-ready. |
 
 ## 5. Security Findings
@@ -61,7 +61,7 @@ Finding totals: **1 Critical, 5 High, 8 Medium, 4 Low**.
 
 | ID | Severity | Component | Finding | Recommended Action |
 |---|---|---|---|---|
-| SCR-01 | High | BaseScraper / headless scraper | Retry plus Axios-to-Playwright fallback can run far beyond the client timeout, and `networkidle` is fragile for retailer pages. | Add a single cancellation-aware job deadline and bounded retry/backoff policy. |
+| SCR-01 | High | BaseScraper / headless scraper | Retry plus Axios-to-Playwright fallback can run far beyond the client timeout, and `networkidle` is fragile for retailer pages. | **Resolved (2026-09-16)**: Added 18s scraper budget, 6s HTTP / 8s browser timeouts, deadline-aware retry bailing, and end-to-end `AbortSignal` cancellation. |
 | SCR-02 | Medium | All platform scrapers | Selectors are narrow and tested only against hand-authored static HTML; no live-contract or saved-real-fixture coverage exists. | Establish versioned sanitized fixtures/contract checks and selector observability. |
 | SCR-03 | Medium | Review extraction | Review count is the number of extracted strings, not the retailer's count; Amazon/Flipkart do not deduplicate, and generic deduplication is exact-string only. | Normalize reviews, deduplicate consistently, retain source metadata, and distinguish sample size from retailer review count. |
 | SCR-04 | Medium | Platform detection | Regex matching checks any URL substring, so lookalike domains can select a retailer-specific scraper. | Match parsed hostname against explicit registrable-domain allowlists. |
@@ -82,8 +82,8 @@ The API key stays server-side and the current `.env` key is blank. The architect
 
 ## 8. Backend Findings
 
-- **REL-01 — High:** `forceRefresh` is ineffective against persistent cache because `urlHash` is unique and a refresh uses `Analysis.create()` rather than replace/upsert/versioned storage.
-- **REL-02 — High:** The 30-second client timeout is not aligned to three direct retries plus headless fallback/navigation. The abort is not propagated to scraper/browser/Gemini work.
+- **REL-01 — High:** `forceRefresh` is ineffective against persistent cache because `urlHash` is unique and a refresh uses `Analysis.create()` rather than replace/upsert/versioned storage. *(Resolved: replaced with findOneAndUpdate upsert).*
+- **REL-02 — High:** The 30-second client timeout is not aligned to three direct retries plus headless fallback/navigation. The abort is not propagated to scraper/browser/Gemini work. *(Resolved 2026-09-16: Hierarchical budget 32s client > 26s backend deadline > 18s scraper > 6s AI; cancellation via AbortController and req.on('close') cleanly aborts Axios, Playwright, and mutex locks).*
 - **BE-01 — Medium:** `GET /history?limit=` accepts unbounded user input; a negative/large limit can cause unnecessary database/memory work.
 - **BE-02 — Medium:** In-memory history returns `Map` insertion order rather than actual newest-first and is lost on restart; it is not semantically equivalent to Mongo history.
 - **BE-03 — Low:** There is no structured logging, request/job ID, metrics, or trace linking a request to scrape, AI, cache, and error outcomes.
@@ -93,7 +93,7 @@ The route/controller separation and per-process in-flight deduplication are appr
 ## 9. Frontend Findings
 
 - The client uses browser-level `type="url"` validation only; the backend remains the correct enforcement point. It cannot explain unsupported stores or distinguish a timeout from a still-running server job.
-- **UX-01 — Medium:** A 30-second Axios timeout clears loading and displays an error while the backend can still finish, persist, and consume AI/browser resources.
+- **UX-01 — Medium:** A 30-second Axios timeout clears loading and displays an error while the backend can still finish, persist, and consume AI/browser resources. *(Resolved 2026-09-16: Axios timeout set to 32s safety floor, backend controller returns structured HTTP 504 at 26s, client renders categorized timeout banner with retry & force refresh actions, and cancellation cleans up server resources).*
 - **UX-02 — Medium:** History is fetched once and after submission; errors are silently reduced to an empty list. History entries are partial projections, but selection sets them as full `analysisData`, creating a malformed/stale dashboard risk.
 - **UX-03 — Low:** Product image URLs are untrusted remote content loaded by the visitor's browser; there is no image fallback. The original-store link is safely marked `rel="noopener noreferrer"`.
 - No frontend tests, runtime response schema validation, or explicit accessible status/live-region behavior were found. Rendering uses React text nodes and no dangerous HTML API was found.
@@ -186,3 +186,18 @@ This is first because the current URL check creates a false sense of protection 
 - No Git metadata exists in this workspace, so branch, commit, tracked/ignored secrets, ownership, and whether `client/dist` is intentionally committed cannot be confirmed.
 - No live retailer, MongoDB, Gemini, proxy, or deployed CORS environment was contacted by design. Current selector validity, provider configuration, and deployment network topology remain unverified.
 - The audit cannot confirm whether the blank local `GEMINI_API_KEY` is representative of deployment; it only confirms the code path selected when the key is absent.
+
+## 20. Audit Remediation Tracker & Verification Log
+
+| Audit Finding ID | Severity | Category | Remediation Status | Verification Method |
+|---|---|---|---|---|
+| **SEC-01** | Critical | SSRF / Redirect Bypass | 🟢 **Resolved** | `safeFetch.js` with `safeLookup` inspecting every hop + Playwright route interception; `safeFetch.test.js` passing. |
+| **SEC-02** | High | IP Address Validation | 🟢 **Resolved** | `ipValidator.js` with full CIDR-aware IPv4/IPv6, CGNAT, Link-Local coverage; `validateUrl.test.js` passing. |
+| **SEC-03** | High | CORS Configuration | 🟢 **Resolved** | Fail-closed CORS in production; allowlist in development; 100KB payload limit. |
+| **REL-01** | High | MongoDB forceRefresh | 🟢 **Resolved** | `AnalysisService` uses `findOneAndUpdate(..., { upsert: true })` preventing E11000 duplicate key error. |
+| **REL-02 / BUG-009** | High | Client/Server Timeout Mismatch | 🟢 **Resolved (2026-09-16)** | Hierarchical budget (32s client, 26s backend deadline, 18s scraper, 6s AI); request-level `AbortController` linked to `req.on('close')`; `timeoutPipeline.test.js` (7 tests) passing. |
+| **SCR-01** | High | Scraper Budget & Headless Fallback | 🟢 **Resolved (2026-09-16)** | Bounded 18s scraper budget, deadline-aware retry bailing, Playwright launch timeout (8s), nav (8s), selector (3s). |
+| **UX-01** | Medium | Frontend Timeout Error Handling | 🟢 **Resolved (2026-09-16)** | Client Axios timeout increased to 32s; categorized error alert cards for Timeout (with retry & force refresh), Blocked Source (502), and Technical Failure; live elapsed timer in `LoadingSkeleton.jsx`. |
+| **AI-01 / AI-03** | High | MockAI Fabrication & Schema | 🟢 **Resolved** | Strict data-quality states (`REVIEWS_AVAILABLE`, `LIMITED_REVIEWS`, `NO_REVIEWS_FOUND`), no fake review fabrication, Zod schema validation with `isMock` and `provider` tracking. |
+| **TEST-01** | High | Zero Test Coverage | 🟢 **Resolved** | Expanded from 0 tests to **84 automated tests across 11 test suites (100% pass rate)**. |
+

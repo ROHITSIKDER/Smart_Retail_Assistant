@@ -33,7 +33,7 @@ export class BaseScraper {
   }
 
   async fetchWithAxios(proxyConfig, options = {}) {
-    const { timeout = 8000, signal = null } = options;
+    const { timeout = 6000, signal = null } = options;
     const axiosConfig = {
       headers: this.headers,
       timeout,
@@ -63,9 +63,9 @@ export class BaseScraper {
       maxRetries = Math.min(2, ProxyManager.getMaxRetries()),
       signal = null,
       deadline = null,
-      httpTimeout = 8000,
-      navTimeout = 10000,
-      selectorTimeout = 4000
+      httpTimeout = 6000,
+      navTimeout = 8000,
+      selectorTimeout = 3000
     } = options;
 
     const attempts = Math.max(1, maxRetries);
@@ -223,12 +223,28 @@ export class BaseScraper {
           });
         }
 
+        if (error.code === 'ECONNABORTED' || (typeof error.message === 'string' && error.message.toLowerCase().includes('timeout'))) {
+          error = new ExtractionError(`Fetch timed out (${error.message}).`, {
+            category: ErrorCategory.TIMEOUT,
+            statusCode: 504,
+            platform,
+            diagnostics: this.getRedactedDiagnostics()
+          });
+        }
+
         lastError = error;
         if (proxyUrl) {
           ProxyManager.markProxyFailed(proxyUrl);
         }
 
-        if (attempt < attempts - 1 && !(error instanceof ExtractionError && error.category === ErrorCategory.PRODUCT_NOT_FOUND)) {
+        if (attempt < attempts - 1 && !(error instanceof ExtractionError && (error.category === ErrorCategory.PRODUCT_NOT_FOUND || error.category === ErrorCategory.TIMEOUT))) {
+          const estimatedNextAttempt = headlessFirst ? (navTimeout + selectorTimeout) : httpTimeout;
+          const remainingTime = deadline ? deadline - Date.now() : Infinity;
+
+          if (remainingTime < estimatedNextAttempt) {
+            console.warn(`[Scraper Warning] Insufficient remaining deadline (${remainingTime}ms < ${estimatedNextAttempt}ms). Skipping retry attempt ${attempt + 2}.`);
+            break;
+          }
           console.warn(`[Scraper Warning] Fetch attempt ${attempt + 1}/${attempts} failed (${error.message}). Retrying...`);
         } else {
           break;

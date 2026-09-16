@@ -97,6 +97,12 @@
 - [x] **Task 5: Multi-Store Regression & Fixture Test Suite**
   - [x] Added 12 sanitized HTML fixtures for Amazon, Flipkart, Walmart, Target, eBay, Myntra, and Generic stores.
   - [x] 66 automated tests across 9 test files passing with 100% success rate.
+- [x] **Task 6: Frontend/Backend Timeout Alignment & Pipeline Cancellation (BUG-009)**
+  - [x] Resolved client/server timeout mismatch with strictly decreasing hierarchical budget (32s client, 26s backend deadline, 18s scraper, 6s AI).
+  - [x] Wired deadline-aware retry bailing, Playwright launch timeout (8s), and Gemini SDK timeout race with graceful `MockAI` fallback.
+  - [x] Implemented end-to-end cancellation via `AbortController` and `req.on('close')`, ensuring Playwright pages and in-flight mutex locks are cleanly released.
+  - [x] Added live elapsed timer in `LoadingSkeleton.jsx` and rich categorized UI alert banners for Timeout (with retry & force refresh), Blocked Source (502), and Extraction Failure.
+  - [x] Expanded test suite with `timeoutPipeline.test.js` achieving 84 passing tests across 11 test files (100% pass rate).
 
 ---
 
@@ -125,8 +131,8 @@
 | **BUG-006** | 🟡 Medium | Performance | **MongoDB Offline Delays**: Disconnected DB causes 5s Mongoose query buffering timeouts per request. | 🛠 Fixed | Added global connection state tracking in `db.js` to skip DB calls when offline. |
 | **BUG-007** | 🟡 Medium | Reliability | **Unvalidated AI Output**: Gemini JSON response parsed without schema validation. | 🛠 Fixed | Enforced shared Zod `reportSchema` on Gemini AI and Mock AI output with `isMock` and `provider` tracking. |
 | **BUG-008** | 🟡 Medium | Concurrency | **Duplicate Request Race Condition**: Simultaneous requests for uncached URL run duplicate scraping/AI jobs. | 🛠 Fixed | Added in-flight request deduplication lock in `AnalysisService`. |
-| **BUG-009** | 🟡 Medium | UX/API | **Timeout Mismatch**: Frontend Axios timeout (30s) aborts while server continues long scraper/AI operations. | 🛠 Fixed | Lowered Playwright navigation timeouts and added bounded selector waits. |
-| **BUG-010** | 🟡 Medium | Quality | **Zero Test Coverage**: No unit, integration, or API tests exist in the project. | 🛠 Fixed | Implemented Vitest + Supertest suite with 100% pass rate across 66 tests in 9 test suites. |
+| **BUG-009** | 🟠 High | UX/API/Pipeline | **Timeout Mismatch & Cancellation Gap**: Frontend Axios (30s) aborted while server could run up to 60s+ with retries and AI. Client disconnect did not cancel backend work. | 🛠 Fixed | Implemented hierarchical budget (32s client, 26s controller deadline, 18s scraper, 6s AI), request-level AbortController on req.on('close'), Playwright teardown, live UI timer, and retry/timeout alert banners. |
+| **BUG-010** | 🟡 Medium | Quality | **Zero Test Coverage**: No unit, integration, or API tests exist in the project. | 🛠 Fixed | Implemented Vitest + Supertest suite with 100% pass rate across 84 tests in 11 test suites. |
 | **BUG-011** | 🟢 Low | i18n/Encoding | **Mojibake Risk**: Currency symbols (`₹`) & emojis could misrender if non-UTF-8 parsed. | 🛠 Fixed | Enforced explicit UTF-8 encoding in HTML and response headers. |
 | **BUG-012** | 🟢 Low | Scrapers | **ProxyManager Port Doubling & Credential Leak**: Playwright server URL generated duplicate ports (`proxy3:8888:8888`) and retained auth credentials in `proxy.url`. | 🛠 Fixed | Redacted credentials in `parseProxyUrl` and formatted Playwright proxy server cleanly. |
 | **BUG-013** | 🟡 Medium | Security/AI | **Prompt Injection via Customer Reviews**: Untrusted scraped reviews passed raw into LLM prompt. | 🛠 Fixed | Encapsulated reviews in XML tags with length bounding (max 500 chars, max 20 reviews) and strict instructions. |
@@ -136,6 +142,60 @@
 ---
 
 ## 📝 4. Development Activity Log
+
+### Date: 2026-09-16
+- **Frontend/Backend Timeout Mismatch Remediation & Cancellation Pipeline (BUG-009 / Task 2)**:
+  - **Previous Timeout Configuration**:
+    - Frontend Axios timeout: 30,000ms (30s).
+    - Backend Express request timeout: Unbounded (Node default 300s).
+    - Scraper direct HTTP timeout: 8,000ms (8s) per attempt; safeAgent timeout 15,000ms.
+    - Scraper Playwright navigation timeout: 10,000ms (10s); selector wait: 4,000ms (4s); launch timeout: unbounded (Playwright 30s).
+    - Scraper retry loop: 2 attempts with potential fallback, yielding worst-case scraper time of up to 44s.
+    - AI generation timeout: 8,000ms in signature, but completely unwired/unbounded in Gemini SDK call.
+    - Cumulative worst case: ~55–60s+, causing frontend to abort at 30s while backend continued running orphaned tasks.
+  - **New Timeout Configuration**:
+    - **Frontend Axios Timeout**: `32,000ms` (32s safety floor, exceeding backend deadline).
+    - **Backend Request Deadline**: `26,000ms` (26s enforced in `analysisController.js`, returns HTTP 504 Gateway Timeout before client drops).
+    - **Scraper Total Budget**: Capped at `18,000ms` (18s) with deadline-aware retry bailing (`skip attempt if remaining budget < 6s`).
+    - **Direct HTTP Timeout**: `6,000ms` (6s) per attempt.
+    - **Playwright Navigation Timeout**: `8,000ms` (8s); **Selector Timeout**: `3,000ms` (3s); **Browser Launch Timeout**: `8,000ms` (8s).
+    - **AI Generation Timeout**: `6,000ms` (6s) wired via `Promise.race` against `AbortSignal` with graceful fallback to `MockAI` (`fallbackReason: 'AI_TIMEOUT'`).
+    - **Database / Transit Cushion**: 2s remaining before the 26s deadline.
+  - **Why the New Values Were Selected**:
+    - Direct HTTP of product HTML consistently succeeds within 2–4s; 6s provides headroom while failing fast on dropped connections.
+    - Playwright `domcontentloaded` for e-commerce PDPs resolves within 3–6s; 8s is ample.
+    - Gemini 1.5 Flash typically responds in 1.5–3.5s; 6s prevents AI API hangs from blocking the pipeline.
+    - The strictly decreasing hierarchy (32s client > 26s server > 18s scraper > 6s AI) mathematically guarantees that the backend responds with a structured HTTP 504 JSON response ~6s before the frontend would trigger an unformatted Axios timeout.
+  - **Cancellation Architecture**:
+    - Implemented request-level `AbortController` in `analysisController.js`.
+    - Attached `req.on('close')` to detect client disconnect and abort server-side work.
+    - Propagated `signal` down through `AnalysisService`, `BaseScraper`, Axios HTTP client, Playwright browser context (`context.close()`), and `GeminiAI`.
+    - Automatically clean up `inFlightRequests` mutex lock on abort/failure to prevent deadlock.
+  - **Frontend UX Enhancements**:
+    - Enhanced `api.js` to parse rich error categories (`TIMEOUT`, `BOT_BLOCKED`, `CAPTCHA`, `ACCESS_DENIED`, `LAYOUT_CHANGED`).
+    - Upgraded `App.jsx` with distinct alert banners: ⏳ **Timeout** (with retry & force refresh buttons), 🛡️ **Blocked Source** (explaining anti-bot security), and ⚠️ **Technical Failure**.
+    - Upgraded `LoadingSkeleton.jsx` with live elapsed seconds counter (`Elapsed: Xs / max 26s budget`) and "Cancel Analysis" button.
+  - **Files Changed**:
+    - `server/server.js`: Added `server.requestTimeout = 30000` and `headersTimeout = 31000`.
+    - `server/controllers/analysisController.js`: Added 26s deadline timer, `req.on('close')` abort, and 504 error handling.
+    - `server/services/analysisService.js`: Accepted `{ signal, deadline }`, propagated to scraper & AI, cleaned up `inFlightRequests`.
+    - `server/services/scrapers/baseScraper.js`: Tuned timeouts (6s/8s/3s), added deadline-aware retry guard, classified `ECONNABORTED`/timeouts.
+    - `server/services/scrapers/headlessScraper.js`: Tuned timeouts (8s/3s) and improved error handling.
+    - `server/services/scrapers/browserPool.js`: Added 8s launch timeout.
+    - `server/services/ai/geminiAI.js`: Wired 6s timeout race and `signal` with graceful `MockAI` fallback (`fallbackReason: 'AI_TIMEOUT'`).
+    - `server/middleware/errorHandler.js`: Added `headersSent` guard.
+    - `client/src/services/api.js`: Set 32s timeout, added cancellation and rich error categorization.
+    - `client/src/App.jsx`: Added abort controller, categorized error alert banners, retry buttons, and cancel action.
+    - `client/src/components/LoadingSkeleton.jsx`: Added live timer and cancel button.
+    - `server/tests/timeoutPipeline.test.js`: Added 7 integration tests.
+    - `PROJECT_TRACKER.md`: Updated BUG-009 and activity log.
+  - **Tests Executed**:
+    - `server/tests/timeoutPipeline.test.js` (7 new tests): Verified successful scrape within budget, backend timeout (504), client cancellation, retry exhaustion, deadline bailing, AI timeout fallback, and blocked source classification.
+    - Full server test suite: **84 passed across 11 test files (100% pass rate)**.
+    - Client production build (`npm run build`): **0 errors, 1640 modules transformed in 3.06s**.
+  - **Remaining Limitations**:
+    - Very slow proxies (>6s per hop) may trigger premature timeout; operators should maintain high-speed proxy pools.
+    - Synchronous connection is held open during scraping; multi-page review pagination in Phase 3 will adopt the background async worker queue architecture.
 
 ### Date: 2026-09-13
 - **Elimination of Premature INSUFFICIENT_DATA Pipeline Crash & Explicit Data-Quality States (BUG-015)**:

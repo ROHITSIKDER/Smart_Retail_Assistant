@@ -39,12 +39,15 @@ export { app };
 if (process.env.NODE_ENV !== 'test') {
   const startServer = async () => {
     await connectDB();
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`================================================`);
       console.log(`🚀 SRA Backend Service running on port ${PORT}`);
       console.log(`📡 Health check: http://localhost:${PORT}/api/v1/health`);
       console.log(`================================================`);
     });
+    // Protect HTTP server socket lifecycle
+    server.requestTimeout = 30000;
+    server.headersTimeout = 31000;
   };
 
   startServer();

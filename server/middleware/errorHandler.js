@@ -1,4 +1,8 @@
 export const errorHandler = (err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+
   if (err.diagnostics) {
     console.warn(`[Extraction Diagnostics] [${err.platform || 'unknown'}] [${err.category || err.code || 'ERROR'}]:`, JSON.stringify(err.diagnostics));
   } else {
